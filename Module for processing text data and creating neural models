@@ -1,0 +1,319 @@
+import numpy as np # Библиотека для работы с массивами данных
+from tensorflow.keras.models import Model, load_model # Импортируем Model, load_model - метод, что загружает предобученную сеть
+import re # Имортируем чтобы работать с строками
+from tensorflow.keras.preprocessing.text import Tokenizer # Метод, который поволяет работать с текстами и конвертирует их в последовательности (индексов)
+# Импорт слоёв нейронных сетей
+from tensorflow.keras.layers import Dense, Embedding, Input, concatenate, Activation, MaxPooling1D, Conv1D, BatchNormalization, Dropout, Conv2DTranspose, Conv1DTranspose, Lambda
+from tensorflow.keras import backend as K # Импортируем, чтобы высчитать dice_coef(ошибку)
+from tensorflow.keras.optimizers import Adam, Adadelta # Импортируем оптимизаторы
+from tensorflow.keras import utils # Импортируем для работы с категориальными данными
+import tensorflow
+from google.colab import files # Импорт для работы с файлами
+import matplotlib.pyplot as plt # Импорт для отрисовывания графиков
+from gensim.models import word2vec # Импортируем gensim
+import os # Импортируем для работы с системными файлами
+import pandas as pd # Импортируем для работы с Массивами данных(таблицами - Датафреймами)
+import time # Имортируем, чтобы высчитать время работы каких-либо процессов
+import nltk #Natural language toolkit - Инструментарий естественного языка
+from nltk.stem import WordNetLemmatizer  # Импортируем для работы с леммами
+import pymorphy2 # Импортируем для работы с леммами
+
+nltk.download('wordnet') # Скачиваем сетку слов для лемматизации
+def readText(fileName):
+  f = open(fileName, 'r') 
+  text = f.read() 
+  delSymbols = ['\n', "\t", "\ufeff", ".", "_", "-", ",", "!", "?", "–", "(", ")", "«", "»", "№", ";",'•','%']
+  for dS in delSymbols: 
+    text = text.replace(dS, " ")
+    text = re.sub("[.]", " ", text)
+  text = re.sub(":", " ", text)
+  text = re.sub("<", " <", text)
+  text = re.sub(">", "> ", text)  
+  text = ' '.join(text.split()) 
+  text = text.lower() 
+  return text
+def text2Words(text):
+  morph = pymorphy2.MorphAnalyzer() 
+  words = text.split(' ') 
+  docs = [morph.parse(word)[0].normal_form for word in words]
+  return docs   
+directory = '/content/drive/MyDrive/Договора432/' 
+os.listdir(directory)[250:255]
+curTime = time.time() 
+agreements = [] 
+for filename in os.listdir(directory):
+  txt = readText(directory + filename) 
+  if txt != '': 
+    agreements.append(readText(directory + filename)) 
+print('Загрузка файла заняла: ', round(time.time() - curTime, 2), 'с.')
+n = 7
+print(os.listdir(directory)[n])
+agreements[n]
+docs_full = [] 
+for i in range(len(agreements)): 
+  docs_full.append(text2Words(agreements[i])) 
+docs = docs_full[0:-10]
+docsToTest = docs_full[-10:] 
+tokenizer = Tokenizer(lower=True, filters = '', char_level=False)
+tokenizer.fit_on_texts(docs_full) 
+clean_voc = {}                    
+for item in tokenizer.word_index.items(): 
+  clean_voc[item[0]] = item[1] 
+tok_agreem = tokenizer.texts_to_sequences(docs)  
+def getXYSamples(tok_agreem, tags_index):
+  tags01 = [] 
+  indices = [] 
+  for agreement in tok_agreem: 
+    tag_place = [0, 0, 0, 0, 0, 0] 
+    for ex in agreement: 
+        if ex in tags_index: 
+          place = np.argwhere(tags_index==ex) 
+          if len(place)!=0: 
+            if place[0][0]<6: 
+              tag_place[place[0][0]] = 1    
+            else: 
+              tag_place[place[0][0] - 6] = 0  
+        else:          
+          tags01.append(tag_place.copy()) 
+          indices.append(ex) 
+  return indices, tags01
+def reverseIndex(clean_voc, x):
+  reverse_word_map = dict(map(reversed, clean_voc.items())) 
+  docs = [reverse_word_map.get(letter) for letter in x] 
+  return docs
+tags_index = ['<s' + str(i) + '>' for i in range(1, 7)]
+closetags = ['</s' + str(i) + '>' for i in range(1, 7)] 
+tags_index.extend(closetags) 
+tags_index = np.array([clean_voc[i] for i in tags_index])
+xData, yData = getXYSamples(tok_agreem,tags_index) 
+decoded_text = reverseIndex(clean_voc, xData)
+def getSetFromIndices(wordIndices, xLen, step): 
+  xBatch = [] 
+  wordsLen = len(wordIndices)
+  index = 0   
+  while (index + xLen <= wordsLen): 
+    xBatch.append(wordIndices[index:index+xLen]) 
+    index += step 
+  return xBatch
+xLen = 256
+step = 30  
+embeddingSize = 300
+xTrain = getSetFromIndices(decoded_text, xLen, step) 
+yTrain = getSetFromIndices(yData, xLen, step)
+tok_agreemTest = tokenizer.texts_to_sequences(docsToTest)
+print("Посмотрим на фрагмент тестового текста:")
+print("Исходный текст:              ", docsToTest[4][:20])
+print("Тот же текст, но как последовательность индексов: ", tok_agreemTest[4][:20], '\n')
+xDataTest, yDataTest = getXYSamples(tok_agreemTest,tags_index) 
+decoded_text = reverseIndex(clean_voc, xDataTest) 
+print('Длина xDataTest:', len(xDataTest))
+print('Длина yDataTest:', len(yDataTest))
+print('Сдекодированные текст:', decoded_text[50:80])
+print('Часть xDataTest:     ', xDataTest[50:80])
+print('Часть yDataTest:     ', yDataTest[50:80])
+xLen = 256 
+step = 30 
+embeddingSize = 300 
+xTest = getSetFromIndices(decoded_text, xLen, step) 
+yTest = getSetFromIndices(yDataTest, xLen, step) 
+print('Длина xTest:', len(xTest))
+print('Длина yTest:', len(yTest))
+print('Длина примера xTest:',len(xTest[0]))
+print('Длина примера yTrain:',len(yTest[0]), '\n')
+print('Пример xTest', xTest[0])
+print('Пример yTest', yTest[0], '\n')
+print('Первый пример xTest:', xTest[0][step-5:step+5])
+print('Второй пример xTest:', xTest[1][:10])
+def dice_coef(y_true, y_pred):
+    return (2. * K.sum(y_true * y_pred) + 1.) / (K.sum(y_true) + K.sum(y_pred) + 1.)
+def create_Conv1d(xLen, embeddingSize): 
+  text_input_layer = Input((xLen,embeddingSize)) 
+  text_layer = Conv1D(16, 3, padding='same',activation='relu')(text_input_layer)
+  text_layer = Conv1D(16, 3, padding='same',activation='relu')(text_layer)
+  text_layer = Conv1D(16, 3,padding='same', activation='relu')(text_layer) 
+  text_layer = Conv1D(GENSIMtrainY.shape[-1], 3, padding='same',activation='sigmoid')(text_layer)
+  model = Model(text_input_layer, text_layer)
+  model.compile(optimizer=Adadelta(),
+                    loss='categorical_crossentropy',
+                    metrics=[dice_coef])
+  return model
+def create_PSPNet(conv_size = 64, num_classes = 6, input_shape = (30, 300)):
+    img_input = Input(input_shape)
+    x = Conv1D(conv_size, 3, padding='same')(img_input)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)  
+    x = Conv1D(conv_size, 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x_mp_2 = MaxPooling1D(2)(x)
+    x_mp_4 = MaxPooling1D(4)(x)
+    x_mp_8 = MaxPooling1D(8)(x)
+    x_mp_16 = MaxPooling1D(16)(x)
+    x_mp_32 = MaxPooling1D(32)(x)
+    x_mp_2 = Conv1D(conv_size, 3, padding='same', activation='relu')(x_mp_2)
+    x_mp_2 = Dropout(0.5)(x_mp_2)
+    x_mp_4 = Conv1D(conv_size, 3, padding='same', activation='relu')(x_mp_4)
+    x_mp_4 = Dropout(0.5)(x_mp_4)
+    x_mp_8 = Conv1D(conv_size, 3, padding='same', activation='relu')(x_mp_8)
+    x_mp_8 = Dropout(0.5)(x_mp_8)
+    x_mp_16 = Conv1D(conv_size, 3, padding='same', activation='relu')(x_mp_16)
+    x_mp_16 = Dropout(0.5)(x_mp_16)
+    x_mp_32 = Conv1D(conv_size, 3, padding='same', activation='relu')(x_mp_32)
+    x_mp_32 = Dropout(0.5)(x_mp_32) 
+    x_mp_2 = Conv1DTranspose(conv_size, 2, strides=2)(x_mp_2)
+    x_mp_2 = Activation('relu')(x_mp_2)
+    x_mp_4 = Conv1DTranspose(conv_size, 4, strides=4)(x_mp_4)
+    x_mp_4 = Activation('relu')(x_mp_4)
+    x_mp_8 = Conv1DTranspose(conv_size, 8, strides=8)(x_mp_8)
+    x_mp_8 = Activation('relu')(x_mp_8)
+    x_mp_16 = Conv1DTranspose(conv_size, 16, strides=16)(x_mp_16)
+    x_mp_16 = Activation('relu')(x_mp_16)
+    x_mp_32 = Conv1DTranspose(conv_size, 32, strides=32)(x_mp_32)
+    x_mp_32 = Activation('relu')(x_mp_32)
+    fin = concatenate([img_input, x_mp_2, x_mp_4, x_mp_8, x_mp_16, x_mp_32])    
+    fin = Conv1D(conv_size, 3, padding='same')(fin)
+    fin = BatchNormalization()(fin)
+    fin = Activation('relu')(fin)
+    fin = Conv1D(conv_size, 3, padding='same')(fin)
+    fin = BatchNormalization()(fin)
+    fin = Activation('relu')(fin)
+    fin = Conv1D(num_classes, 3, activation='sigmoid', padding='same')(fin)
+    model = Model(img_input, fin)
+    model.compile(optimizer=Adadelta(lr=0.001),
+                  loss='categorical_crossentropy',
+                  metrics=[dice_coef])    
+    return model      
+def create_unet(k = 1, num_classes = 6, input_shape= (30, 300)):
+    img_input = Input(input_shape) 
+    x = Conv1D(64 * k , 3, padding='same')(img_input) 
+    x = BatchNormalization()(x) 
+    x = Activation('relu')(x)
+    x = Conv1D(64 * k, 3, padding='same')(x)  
+    x = BatchNormalization()(x)     
+    block_1_out = Activation('relu')(x) 
+    x = MaxPooling1D()(block_1_out)
+    x = Conv1D(128 * k, 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)  
+    x = Conv1D(128 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    block_2_out = Activation('relu')(x)
+    x = MaxPooling1D()(block_2_out)
+    x = Conv1D(256 * k, 3, padding='same')(x)
+    x = BatchNormalization()(x)               
+    x = Activation('relu')(x)                     
+    x = Conv1D(256 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1D(256 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    block_3_out = Activation('relu')(x)
+    x = MaxPooling1D()(block_3_out)
+    x = Conv1D(512 * k, 3, padding='same')(x)
+    x = BatchNormalization()(x) 
+    x = Activation('relu')(x)
+    x = Conv1D(512 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1D(512 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)      
+    block_4_out = Activation('relu')(x)
+    x = block_4_out 
+    x = Conv1DTranspose(256 * k, kernel_size=3, strides=2, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x) 
+    x = concatenate([x, block_3_out]) 
+    x = Conv1D(256 * k , 3, padding='same')(x) 
+    x = BatchNormalization()(x) 
+    x = Activation('relu')(x)
+    x = Conv1D(256 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1DTranspose(128 * k, kernel_size=3, strides=2, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x) 
+    x = concatenate([x, block_2_out])
+    x = Conv1D(128 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1D(128 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1DTranspose(64 * k, kernel_size=3, strides=2, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = concatenate([x, block_1_out])
+    x = Conv1D(64 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1D(64 * k , 3, padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = Conv1D(num_classes, 3, activation='sigmoid', padding='same')(x)
+    model = Model(img_input, x) 
+    model = Model(img_input, x)
+    model.compile(optimizer=Adam(0.0025), 
+                  loss='categorical_crossentropy',
+                  metrics=[dice_coef])
+    return model    
+def pad_zeros(phrase, xLen = 256): 
+  while len(phrase) < xLen:  
+    phrase.append([0] * embeddingSize) 
+  if len(phrase) > xLen: 
+    phrase = phrase[:xLen] 
+  return phrase 
+def getSets(model, senI, tagI):
+  xVector = [] 
+  tmp = [] 
+  for text in senI: 
+    tmp=[]
+    for word in text: 
+      try: 
+        tmp.append(model[word])
+      except: 
+        pass
+    xVector.append(pad_zeros(tmp, xLen))
+  temp = np.array(xVector)
+  return np.array(xVector, dtype = np.float32), np.array(tagI)
+modelGENSIM = word2vec.Word2Vec(xTrain + xTest, size = embeddingSize, window = 10, min_count = 1, workers = 10, iter = 10, max_vocab_size = 1e5)
+GENSIMtrainX, GENSIMtrainY = getSets(modelGENSIM, xTrain, yTrain)
+GENSIMtestX, GENSIMtestY = getSets(modelGENSIM, xTest, yTest)  
+model_b_UNET = create_unet(input_shape=(xLen, embeddingSize))
+model_b_UNET.summary()
+history = model_b_UNET.fit(GENSIMtrainX, GENSIMtrainY, validation_data = (GENSIMtestX, GENSIMtestY), epochs=30, batch_size=64)
+model_conv1d = create_Conv1d(xLen, embeddingSize) 
+model_conv1d.summary()
+history = model_conv1d.fit(GENSIMtrainX, GENSIMtrainY, epochs=50, batch_size=200, validation_data=(GENSIMtestX, GENSIMtestY))
+model_b_PSPnet = create_PSPNet(input_shape=(xLen, embeddingSize))
+history = model_b_PSPnet.fit(GENSIMtrainX, GENSIMtrainY, validation_data = (GENSIMtestX, GENSIMtestY), epochs=50, batch_size=512)
+model_b_PSPnet = create_PSPNet(conv_size = 512, input_shape=(xLen, embeddingSize))
+history = model_b_PSPnet.fit(GENSIMtrainX, GENSIMtrainY, validation_data = (GENSIMtestX, GENSIMtestY), epochs=10, batch_size=64)
+def recognizeSet(XX, YY, model, tags, length, value):
+  correct_list = np.array([0] * 6) 
+  incorrect_list =  np.array([0] * 6)  
+  XX_array = XX
+  YY_array = YY
+  pred = model.predict(XX_array)
+  pred[pred < value] = 0
+  pred[pred > value] = 1
+  for element in range(YY_array.shape[0]): 
+    for word in range(YY_array.shape[1]):  
+      for category in range(YY_array.shape[2]): 
+        if pred[element][word][category] == YY_array[element][word][category]: 
+          correct_list[category] += 1 
+        else:  
+          incorrect_list[category] += 1 
+  for i in range(6):
+   print("Сеть распознала категорию  '{}' с точностью в {}%".format(tags[i], round(100*correct_list[i]/(correct_list[i] + incorrect_list[i]), 2)))
+  total = round(100*np.mean(correct_list/(correct_list + incorrect_list)),2) 
+  print("Средняя точность {}%".format(total))
+tags = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
+recognizeSet(GENSIMtestX, GENSIMtestY, model_conv1d, tags, xLen, 0.97)
+model_b_UNET = create_unet(input_shape=(xLen, embeddingSize))
+model_b_UNET.summary()
+history = model_b_UNET.fit(GENSIMtrainX, GENSIMtrainY, validation_data = (GENSIMtestX, GENSIMtestY), epochs=50, batch_size=512)
+model_conv1d = create_Conv1d(xLen, embeddingSize) 
+model_conv1d.summary()
+history = model_conv1d.fit(GENSIMtrainX, GENSIMtrainY, epochs=50, batch_size=512, validation_data=(GENSIMtestX, GENSIMtestY))
+model_b_PSPnet = create_PSPNet(input_shape=(xLen, embeddingSize))
+history = model_b_PSPnet.fit(GENSIMtrainX, GENSIMtrainY, validation_data = (GENSIMtestX, GENSIMtestY), epochs=50, batch_size=512)
